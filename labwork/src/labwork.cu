@@ -2,8 +2,11 @@
 #include <include/labwork.h>
 #include <cuda_runtime_api.h>
 #include <omp.h>
+#include <iostream>
 
 #define ACTIVE_THREADS 4
+
+int blockSize = 64;
 
 int main(int argc, char **argv) {
     printf("USTH ICT Master 2018, Advanced Programming for HPC.\n");
@@ -45,6 +48,7 @@ int main(int argc, char **argv) {
             labwork.labwork2_GPU();
             break;
         case 3:
+            std::cout << "blockSize: "; std::cin >> blockSize;
             labwork.labwork3_GPU();
             labwork.saveOutputImage("labwork3-gpu-out.jpg");
             break;
@@ -195,7 +199,6 @@ void Labwork::labwork3_GPU() {
     cudaMemcpy(devInput, inputImage->buffer, pixelCount, cudaMemcpyHostToDevice);
 
     // Processing
-    int blockSize = 64;
     int numBlock = pixelCount / (blockSize * 3);
     grayScale<<<numBlock, blockSize>>>(devInput, devOutput);
 
