@@ -158,6 +158,17 @@ void Labwork::labwork2_GPU() {
         cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, i);
         // something more here
+	// Device name + core info (clock rate, core counts, multiprocessor count, warp size)
+	// Memory info (clock rate, bus width, bandwidth)
+	printf("Device name: %s\n\n", prop.name);
+	printf("Core info:\n");
+	printf("Clock Rate: %d\n", prop.clockRate);
+	printf("Multiprocessor Count: %d\n", prop.multiProcessorCount);
+	printf("Warp Size: %d\n\n", prop.warpSize);
+	printf("Memory info:\n");
+	printf("Clock Rate: %d\n", prop.memoryClockRate);
+	printf("Bus Width: %d\n", prop.memoryBusWidth);
+	printf("Bandwidth: %f\n\n", 2.0*prop.memoryClockRate*(prop.memoryBusWidth/8)/1.0e6);
     }
 
 }
