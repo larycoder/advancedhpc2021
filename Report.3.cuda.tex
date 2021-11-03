@@ -1,8 +1,15 @@
 \documentclass{article}
+
+\usepackage{graphicx}
+
+\title{Report 3: Convert Color to GrayScale Image by Cuda}
+\author{Le Nhu Chu Hiep}
+
 \begin{document}
+\maketitle
 
 \begin{itemize}
-    \item First think is defined grayScale function following slide example.
+    \item First thing: define grayScale function following slide example.
     \item Malloc space for cuda dev input and dev output
     \item Mem copy input buffer to dev input
     \item run grayScale function
@@ -10,7 +17,7 @@
     \item free cuda malloc
 \end{itemize}
 
-Speedup
+Result in console:
 \begin{verbatim}
 USTH ICT Master 2018, Advanced Programming for HPC.
 Warming up...
@@ -18,4 +25,10 @@ Starting labwork 3
 labwork 3 ellapsed 144.3ms
 \end{verbatim}
 
+Result Image:
+\begin{figure}
+        \includegraphics{./labwork/data/eiffel.jpg}
+        \includegraphics{./labwork3-gpu-out.jpg}
+        \caption{Eiffel Image}
+\end{figure}
 \end{document}
