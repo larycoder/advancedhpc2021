@@ -211,7 +211,47 @@ void Labwork::labwork3_GPU() {
     cudaFree(devOutput);
 }
 
+
+__global__ void grayScaleMultiDim(uchar3 *input, uchar3 *output, int w, int h) {
+    int tidX = threadIdx.x + blockIdx.x * blockDim.x;
+    int tidY = threadIdx.y + blockIdx.y * blockDim.y;
+    if(tidX > w || tidY > h) return;
+    int tid = tidX + tidY * w;
+    int buffer =  ((int)input[tid].x + (int)input[tid].y + (int)input[tid].z) / 3;
+    output[tid].x = (char)buffer;
+    output[tid].y = output[tid].z = output[tid].x;
+}
+
+
 void Labwork::labwork4_GPU() {
+    // Calculate number of pixels
+    // inputImage struct: width, height, buffer
+    int pixelCount = inputImage->width * inputImage->height * 3;
+
+    // Allocate CUDA memory
+    uchar3 *devInput;
+    uchar3 *devOutput;
+    cudaMalloc(&devInput, pixelCount);
+    cudaMalloc(&devOutput, pixelCount);
+
+    // Copy CUDA Memory from CPU to GPU
+    cudaMemcpy(devInput, inputImage->buffer, pixelCount, cudaMemcpyHostToDevice);
+
+    // Processing
+    dim3 bSize = dim3(32, 32);
+
+    int dH = inputImage->height / 32 + (inputImage->height % 32 ? 1:0);
+    int dW = inputImage->width / 32 + (inputImage->width % 32 ? 1:0);
+    dim3 gridSize = dim3(dW, dH);
+    grayScaleMultiDim<<<gridSize, bSize>>>(devInput, devOutput, inputImage->width, inputImage->height);
+
+    // Copy CUDA Memory from GPU to CPU
+    outputImage = (char*) malloc(pixelCount);
+    cudaMemcpy(outputImage, devOutput, pixelCount, cudaMemcpyDeviceToHost);
+
+    // Cleaning
+    cudaFree(devInput);
+    cudaFree(devOutput);
 }
 
 void Labwork::labwork5_CPU() {
