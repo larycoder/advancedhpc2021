@@ -59,8 +59,11 @@ int main(int argc, char **argv) {
         case 5:
             labwork.labwork5_CPU();
             labwork.saveOutputImage("labwork5-cpu-out.jpg");
+            printf("labwork 5 CPU ellapsed %.1fms\n", lwNum, timer.getElapsedTimeInMilliSec());
+            timer.start();
             labwork.labwork5_GPU();
             labwork.saveOutputImage("labwork5-gpu-out.jpg");
+            printf("labwork 5 GPU ellapsed %.1fms\n", lwNum, timer.getElapsedTimeInMilliSec());
             break;
         case 6:
             labwork.labwork6_GPU();
@@ -254,10 +257,119 @@ void Labwork::labwork4_GPU() {
     cudaFree(devOutput);
 }
 
+
+int kernel[7][7] = {
+   {0,0,1,2,1,0,0},
+   {0,3,13,22,13,3,0},
+   {1,13,59,97,59,13,1},
+   {2,22,97,159,97,22,2},
+   {1,13,59,97,59,13,1},
+   {0,3,13,22,13,3,0},
+   {0,0,1,2,1,0,0}
+};
+
+
 void Labwork::labwork5_CPU() {
+    int pixelCount = inputImage->width * inputImage->height;
+    outputImage = static_cast<char *>(malloc(pixelCount * 3));
+    // copy input array to output array
+    for(int i = 0; i < pixelCount*3; i++) {
+        outputImage[i] = inputImage->buffer[i];
+    }
+
+    // kernel sum
+    int kSum = 0;
+    for(int i = 0; i < 7; i++)
+            for(int j = 0; j < 7; j++) kSum += kernel[i][j];
+
+    // blur image
+    for (int row = 3; row < inputImage->height-3; row++) {
+        for (int col = 3; col < inputImage->width-3; col++) {
+            int sR = 0, sG = 0, sB = 0;
+            // convolution
+            for(int x = 0; x < 7; x++) {
+                for(int y = 0; y < 7; y++) {
+                    int iid = (row - 3 + x) * inputImage->width + (col - 3 + y);
+                    sR += (int) inputImage->buffer[iid*3] * kernel[x][y];
+                    sG += (int) inputImage->buffer[iid*3+1] * kernel[x][y];
+                    sB += (int) inputImage->buffer[iid*3+2] * kernel[x][y];
+                }
+            }
+            int oid = row * inputImage->width + col;
+            outputImage[oid*3] = (char) (sR/kSum);
+            outputImage[oid*3+1] = (char) (sG/kSum);
+            outputImage[oid*3+2] = (char) (sB/kSum);
+        }
+    }
 }
 
+
+__global__ void gausBlur(uchar3* input, uchar3* output, int w, int h, int kSum) {
+    // kernel
+    int kernel[7][7] = {
+            {0,0,1,2,1,0,0},
+            {0,3,13,22,13,3,0},
+            {1,13,59,97,59,13,1},
+            {2,22,97,159,97,22,2},
+            {1,13,59,97,59,13,1},
+            {0,3,13,22,13,3,0},
+            {0,0,1,2,1,0,0}
+    };
+
+    // blur image
+    int sR = 0, sG = 0, sB = 0;
+
+    int row = threadIdx.x + blockIdx.x * blockDim.x;
+    int col = threadIdx.y + blockIdx.y * blockDim.y;
+
+    if((row < 3 || row > h - 3) || (col < 3 || col > w)) return;
+
+    // convolution
+    for(int x = 0; x < 7; x++) {
+        for(int y = 0; y < 7; y++) {
+            int iid = (row - 3 + x) * w + (col - 3 + y);
+            sR += (int) input[iid].x * kernel[x][y];
+            sG += (int) input[iid].y * kernel[x][y];
+            sB += (int) input[iid].z * kernel[x][y];
+        }
+    }
+    int oid = row * w + col;
+    output[oid].x = (char) (sR/kSum);
+    output[oid].y = (char) (sG/kSum);
+    output[oid].z = (char) (sB/kSum);
+}
+
+
 void Labwork::labwork5_GPU() {
+    // allocate cuda mem
+    uchar3 *devInput;
+    uchar3 *devOutput;
+    int pixelCount = inputImage->width * inputImage->height;
+    cudaMalloc(&devInput, pixelCount*3);
+    cudaMalloc(&devOutput, pixelCount*3);
+    cudaMemcpy(devInput, inputImage->buffer, pixelCount*3, cudaMemcpyHostToDevice);
+    //cudaMemcpy(devOutput, inputImage->buffer, pixelCount*3, cudaMemcpyHostToDevice);
+
+    // kernel sum
+    int kSum = 0;
+    for(int i = 0; i < 7; i++)
+            for(int j = 0; j < 7; j++) kSum += kernel[i][j];
+
+    // Processing
+    dim3 bS = dim3(16, 16);
+    int dH = inputImage->height / 16 + (inputImage->height % 16 ? 1:0);
+    int dW = inputImage->width / 16 + (inputImage->width % 16 ? 1:0);
+    dim3 gS = dim3(dH, dW);
+    printf("Block Size: %d, Grid Size: %d\n", 32*32, dH*dW);
+
+    gausBlur<<<gS, bS>>>(devInput, devOutput, inputImage->width, inputImage->height, kSum);
+    //grayScaleMultiDim<<<gS, bS>>>(devInput, devOutput, inputImage->width, inputImage->height);
+
+    // Copy cuda mem grom GPU to CPU
+    outputImage = (char*) malloc(pixelCount*3);
+    cudaMemcpy(outputImage, devOutput, pixelCount*3, cudaMemcpyDeviceToHost);
+    cudaFree(devInput);
+    cudaFree(devOutput);
 }
 
 void Labwork::labwork6_GPU() {
