@@ -61,9 +61,13 @@ int main(int argc, char **argv) {
             labwork.saveOutputImage("labwork5-cpu-out.jpg");
             printf("labwork 5 CPU ellapsed %.1fms\n", lwNum, timer.getElapsedTimeInMilliSec());
             timer.start();
-            labwork.labwork5_GPU();
-            labwork.saveOutputImage("labwork5-gpu-out.jpg");
-            printf("labwork 5 GPU ellapsed %.1fms\n", lwNum, timer.getElapsedTimeInMilliSec());
+            labwork.labwork5_GPU(false);
+            labwork.saveOutputImage("labwork5-gpu-out-no-shared.jpg");
+            printf("labwork 5 GPU no shared mem ellapsed %.1fms\n", lwNum, timer.getElapsedTimeInMilliSec());
+            timer.start();
+            labwork.labwork5_GPU(true);
+            labwork.saveOutputImage("labwork5-gpu-out-shared.jpg");
+            printf("labwork 5 GPU shared mem ellapsed %.1fms\n", lwNum, timer.getElapsedTimeInMilliSec());
             break;
         case 6:
             labwork.labwork6_GPU();
@@ -304,7 +308,7 @@ void Labwork::labwork5_CPU() {
 }
 
 
-__global__ void gausBlur(uchar3* input, uchar3* output, int w, int h, int kSum) {
+__global__ void gausBlurNoSharedMem(uchar3* input, uchar3* output, int w, int h, int kSum) {
     // kernel
     int kernel[7][7] = {
             {0,0,1,2,1,0,0},
@@ -340,15 +344,63 @@ __global__ void gausBlur(uchar3* input, uchar3* output, int w, int h, int kSum) 
 }
 
 
-void Labwork::labwork5_GPU() {
+__global__ void gausBlurSharedMem(uchar3* input, uchar3* output, int w, int h, int kSum, int* dKernel) {
+    // kernel
+    __shared__ int kernel[7][7];
+    if (threadIdx.x < 7 && threadIdx.y < 7) {
+        kernel[threadIdx.x][threadIdx.y] = dKernel[threadIdx.x * 7 + threadIdx.y];
+    }
+    __syncthreads();
+
+    // blur image
+    int sR = 0, sG = 0, sB = 0;
+
+    int row = threadIdx.x + blockIdx.x * blockDim.x;
+    int col = threadIdx.y + blockIdx.y * blockDim.y;
+
+    if((row < 3 || row > h - 3) || (col < 3 || col > w)) return;
+
+    // convolution
+    for(int x = 0; x < 7; x++) {
+        for(int y = 0; y < 7; y++) {
+            int iid = (row - 3 + x) * w + (col - 3 + y);
+            uchar3 rI = input[iid];
+            sR += (int) rI.x * kernel[x][y];
+            sG += (int) rI.y * kernel[x][y];
+            sB += (int) rI.z * kernel[x][y];
+        }
+    }
+    int oid = row * w + col;
+    uchar3 rO;
+    rO.x = (char) (sR/kSum);
+    rO.y = (char) (sG/kSum);
+    rO.z = (char) (sB/kSum);
+    output[oid] = rO;
+}
+
+
+void Labwork::labwork5_GPU(bool shareMem) {
     // allocate cuda mem
     uchar3 *devInput;
-    uchar3 *devOutput;
+    uchar3 *devOutput; 
+    int *dKernel;
+
+    int hKernel[7*7] = {
+                0,0,1,2,1,0,0,
+                0,3,13,22,13,3,0,
+                1,13,59,97,59,13,1,
+                2,22,97,159,97,22,2,
+                1,13,59,97,59,13,1,
+                0,3,13,22,13,3,0,
+                0,0,1,2,1,0,0
+    };
     int pixelCount = inputImage->width * inputImage->height;
+    
     cudaMalloc(&devInput, pixelCount*3);
     cudaMalloc(&devOutput, pixelCount*3);
+    cudaMalloc(&dKernel, 7*7*4);
     cudaMemcpy(devInput, inputImage->buffer, pixelCount*3, cudaMemcpyHostToDevice);
-    //cudaMemcpy(devOutput, inputImage->buffer, pixelCount*3, cudaMemcpyHostToDevice);
+    cudaMemcpy(dKernel, hKernel, 7*7*4, cudaMemcpyHostToDevice);
 
     // kernel sum
     int kSum = 0;
@@ -361,9 +413,11 @@ void Labwork::labwork5_GPU() {
     int dW = inputImage->width / 16 + (inputImage->width % 16 ? 1:0);
     dim3 gS = dim3(dH, dW);
     printf("Block Size: %d, Grid Size: %d\n", 32*32, dH*dW);
-
-    gausBlur<<<gS, bS>>>(devInput, devOutput, inputImage->width, inputImage->height, kSum);
-    //grayScaleMultiDim<<<gS, bS>>>(devInput, devOutput, inputImage->width, inputImage->height);
+    
+    if(!shareMem)
+        gausBlurNoSharedMem<<<gS, bS>>>(devInput, devOutput, inputImage->width, inputImage->height, kSum);
+    else
+        gausBlurSharedMem<<<gS, bS>>>(devInput, devOutput, inputImage->width, inputImage->height, kSum, dKernel);
 
     // Copy cuda mem grom GPU to CPU
     outputImage = (char*) malloc(pixelCount*3);
