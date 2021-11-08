@@ -223,7 +223,7 @@ __global__ void grayScaleMultiDim(uchar3 *input, uchar3 *output, int w, int h) {
     int tidX = threadIdx.x + blockIdx.x * blockDim.x;
     int tidY = threadIdx.y + blockIdx.y * blockDim.y;
     if(tidX > w || tidY > h) return;
-    int tid = tidX + tidY * w;
+    int tid = tidX * h + tidY;
     int buffer =  ((int)input[tid].x + (int)input[tid].y + (int)input[tid].z) / 3;
     output[tid].x = (char)buffer;
     output[tid].y = output[tid].z = output[tid].x;
@@ -245,11 +245,15 @@ void Labwork::labwork4_GPU() {
     cudaMemcpy(devInput, inputImage->buffer, pixelCount, cudaMemcpyHostToDevice);
 
     // Processing
-    dim3 bSize = dim3(32, 32);
+    dim3 bSize = dim3(16, 16);
 
-    int dH = inputImage->height / 32 + (inputImage->height % 32 ? 1:0);
-    int dW = inputImage->width / 32 + (inputImage->width % 32 ? 1:0);
+    int dH = inputImage->height / 16 + (inputImage->height % 16 ? 1:0);
+    int dW = inputImage->width / 16 + (inputImage->width % 16 ? 1:0);
     dim3 gridSize = dim3(dW, dH);
+
+    std::cout << "Block Size: " << 16*16 << std::endl;
+    std::cout << "Grid Size: " << dW*dH << std::endl;
+
     grayScaleMultiDim<<<gridSize, bSize>>>(devInput, devOutput, inputImage->width, inputImage->height);
 
     // Copy CUDA Memory from GPU to CPU
