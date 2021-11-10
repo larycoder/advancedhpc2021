@@ -8,10 +8,14 @@ class Labwork {
 private:
     JpegLoader jpegLoader;
     JpegInfo *inputImage;
+    JpegInfo *inputImage2;
+    float threshold;
     char *outputImage;
 
 public:
     void loadInputImage(std::string inputFileName);
+    void loadInputImage2(std::string);
+    void setThreshold(float);
     void saveOutputImage(std::string outputFileName);
 
     void labwork1_CPU();
@@ -26,7 +30,7 @@ public:
     void labwork5_CPU();
     void labwork5_GPU(bool);
 
-    void labwork6_GPU();
+    void labwork6_GPU(char);
 
     void labwork7_GPU();
 
