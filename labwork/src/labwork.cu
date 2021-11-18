@@ -3,6 +3,7 @@
 #include <cuda_runtime_api.h>
 #include <omp.h>
 #include <iostream>
+#include <math.h>
 
 #define ACTIVE_THREADS 4
 
@@ -489,9 +490,9 @@ __global__ void increaseImageBrightness(
     int newGreen = (int) input.y + (int) threshold;
     int newBlue = (int) input.z + (int) threshold;
 
-    output.x = (char) (newRed > 255 ? 255:newRed);
-    output.y = (char) (newGreen > 255 ? 255:newGreen);
-    output.z = (char) (newBlue > 255 ? 255:newBlue);
+    output.x = (char) (newRed > 255 ? 255 : newRed);
+    output.y = (char) (newGreen > 255 ? 255 : newGreen);
+    output.z = (char) (newBlue > 255 ? 255 : newBlue);
     out[iIdx] = output;
 }
 
@@ -501,7 +502,7 @@ __global__ void blendingImage(
         int w1, int w2, int w, int h) {
     int xId = threadIdx.x + blockDim.x * blockIdx.x;
     int yId = threadIdx.y + blockDim.y * blockIdx.y;
-    if(xId >= w || yId >= h) return;
+    if (xId >= w || yId >= h) return;
 
     int index = xId * h + yId;
     uchar3 rIn1 = in1[index], rIn2 = in2[index];
@@ -558,7 +559,165 @@ void Labwork::labwork6_GPU(char type) {
     cudaFree(out);
 }
 
+namespace LW7 {
+    void getLastCudaError(std::string err) {
+        cudaError errCheck = cudaDeviceSynchronize();
+        if (cudaSuccess != errCheck) {
+            std::cout << err << std::endl;
+            std::cout << cudaGetErrorString(errCheck) << std::endl;
+            exit(-1);
+        }
+    }
+
+
+    namespace REDUCE {
+        template<typename FUNC>
+        __global__
+        void reduce_block(uchar3 *out, uchar3 *in, FUNC functor, int size) {
+            extern __shared__ uchar3 cache[];
+            int local = threadIdx.x;
+            int tid = threadIdx.x + blockIdx.x * blockDim.x;
+            if (tid >= size) return;
+            cache[local] = in[tid];
+            __syncthreads();
+            for (int s = 1; s < blockDim.x; s *= 2) {
+                if (local % (s * 2) == 0) {
+                    cache[local] = functor(cache[local], cache[local + s], !(tid + s >= size));
+                }
+                __syncthreads();
+            }
+
+            if (local == 0) out[blockIdx.x] = cache[0];
+        }
+
+        struct maxFunctor {
+            __device__
+            uchar3 operator()(const uchar3 &first, const uchar3 &second, const bool bounded) const {
+                if (!bounded) return first;
+                return {
+                        (first.x > second.x) ? first.x : second.x,
+                        (first.y > second.y) ? first.y : second.y,
+                        (first.z > second.z) ? first.z : second.z,
+                };
+            }
+        };
+
+        struct minFunctor {
+            __device__
+            uchar3 operator()(const uchar3 &first, const uchar3 &second, const bool bounded) const {
+                if (!bounded) return first;
+                return {
+                        (first.x < second.x) ? first.x : second.x,
+                        (first.y < second.y) ? first.y : second.y,
+                        (first.z < second.z) ? first.z : second.z,
+                };
+            }
+        };
+    }
+
+    template<typename T>
+    struct DeviceData {
+        int size;
+        T *data;
+        const int threadSize = 512;
+        int blockSize;
+
+        DeviceData(T *data, int size) {
+            this->size = size;
+            const int realSize = sizeof(T) * this->size;
+            cudaMalloc(&this->data, realSize);
+            getLastCudaError("Could not allocate a DeviceData...");
+            cudaMemcpy(this->data, data, realSize, cudaMemcpyHostToDevice);
+            getLastCudaError("Could not copy data to DeviceData...");
+            getBlockSize();
+        }
+
+        DeviceData(int size) {
+            const int realSize = sizeof(T) * size;
+            cudaMalloc(&this->data, realSize);
+            getLastCudaError("Could not allocate a DeviceData...");
+            this->size = size;
+            getBlockSize();
+        }
+
+        ~DeviceData() {
+            cudaFree(data);
+            getLastCudaError("Could not free DeviceData...");
+        }
+
+        void getBlockSize() {
+            blockSize = (int) (size + threadSize - 1) / threadSize;
+        }
+
+        __device__
+        T operator[](const int &idx) const {
+            return data[idx];
+        }
+
+        __device__
+        T &at(int idx) {
+            return data[idx];
+        }
+
+        __host__
+        void copyToHost(T *holder) {
+            cudaMemcpy(holder, data, size * sizeof(T), cudaMemcpyDeviceToHost);
+        }
+    };
+
+    __global__
+    void convertToGrayScale(uchar3 *out, uchar3 *in, int size) {
+        int tid = threadIdx.x + blockIdx.x * blockDim.x;
+        if (tid >= size) return;
+
+        uchar3 pixel = in[tid];
+        unsigned char mid = ((int) pixel.x + (int) pixel.y + (int) pixel.z) / 3;
+        out[tid] = {mid, mid, mid};
+    }
+
+    __global__
+    void stretchMap(uchar3 *out, uchar3 *in, uchar3 *min, uchar3 *max, int size) {
+        int tid = threadIdx.x + blockIdx.x * blockDim.x;
+        if(tid >= size) return;
+
+        uchar3 rOut = out[tid], rIn = in[tid], rMin = min[0], rMax = max[0];
+        float rangeX = (float) rMax.x - (float) rMin.x;
+        float rangeY = (float) rMax.y - (float) rMin.y;
+        float rangeZ = (float) rMax.z - (float) rMin.z;
+        rOut.x = 255.0 * ((float) rIn.x - (float) rMin.x) / rangeX;
+        rOut.y = 255.0 * ((float) rIn.y - (float) rMin.y) / rangeY;
+        rOut.z = 255.0 * ((float) rIn.z - (float) rMin.z) / rangeZ;
+        out[tid] = rOut;
+    }
+
+    template<typename FUNC>
+    __host__
+    void reduce(
+            uchar3 *out, uchar3 *in, int size, FUNC functor) {
+        if (size == 1) return;
+        const int threads = 512;
+        const int blocks = (size + threads - 1) / threads;
+
+        REDUCE::reduce_block<FUNC><<<blocks, threads, sizeof(uchar3) * threads>>>(out, in, functor, size);
+        getLastCudaError("Reduce framework go wrong...");
+        reduce<FUNC>(out, out, blocks, functor);
+    }
+}
+
 void Labwork::labwork7_GPU() {
+    using namespace LW7;
+    const int imageSize = inputImage->width * inputImage->height;
+    DeviceData<uchar3> image((uchar3 *) inputImage->buffer, imageSize);
+    DeviceData<uchar3> max(image.size), min(image.size), gray(image.size);
+    DeviceData<uchar3> out(image.size);
+
+    convertToGrayScale<<<image.blockSize, image.threadSize>>>(gray.data, image.data, image.size);
+    reduce<REDUCE::maxFunctor>(max.data, gray.data, imageSize, REDUCE::maxFunctor());
+    reduce<REDUCE::minFunctor>(min.data, gray.data, imageSize, REDUCE::minFunctor());
+    stretchMap<<<out.blockSize, out.threadSize>>>(out.data, gray.data, min.data, max.data, imageSize);
+
+    outputImage = (char *) malloc(imageSize * 3);
+    out.copyToHost((uchar3 *) outputImage);
 }
 
 void Labwork::labwork8_GPU() {
