@@ -5,7 +5,7 @@
 #include <iostream>
 #include <math.h>
 
-#define PI 3.14159f
+#define PI 3.14159265359f
 
 #define ACTIVE_THREADS 4
 
@@ -724,60 +724,64 @@ void Labwork::labwork7_GPU() {
 
 namespace LW8 {
     class CustomColor {
-        private:
-            __device__
-                char last(char *ptr, int sign) { // sign > 0 : max | sign < 0 : min
-                    int value = *ptr;
-                    for(int i = 0; i < 3; i++)
-                        if((value - (int) *(ptr + i)) * sign < 0)
-                            value = *(ptr + i);
-                    return value;
-                }
-
         public:
             CustomColor() = default;
 
             __device__
                 void RGB2HSV(float *h, float *s, float *v, uchar3 *rgb) {
-                    uchar3 in = *rgb;
-                    char max = last((char*) &in, 1), min = last((char*) &in, -1);
-                    char delta = max - min;
+                    float3 in;
+                    in.x = rgb->x;
+                    in.y = rgb->y;
+                    in.z = rgb->z;
+
+                    float max, min;
+                    max = (in.x > in.y) ? in.x : in.y;
+                    max = (max > in.z) ? max : in.z;
+                    min = (in.x > in.y) ? in.y : in.x;
+                    min = (min > in.z) ? in.z : min;
+                    float delta =  max - min;
 
                     *v = max;
-                    *s = (max == 0) ? 0 : ((float) delta / (float) max);
-                    if(delta == 0) {
+                    *s = (max <= 0.000001) ? 0 : (delta / max);
+                    if(delta <= 0.000001) {
                         *h = 0;
-                    } else if(in.x == max) {
-                        *h = (PI / 3.0) * ((int) (((float) in.y - (float) in.z) / delta) % 6);
-                    } else if(in.y == max) {
-                        *h = (PI / 3.0) * ((((float) in.z - (float) in.x) / delta) + 2.0);
+                    } else if(in.x >= max) {
+                        *h = 60.0 * ((float) ((int) (in.y - in.z) % 6) / delta);
+                    } else if(in.y >= max) {
+                        *h = 60.0 * (((in.z - in.x) / delta) + 2.0);
                     } else {
-                        *h = (PI / 3.0) * ((((float) in.x - (float) in.y) / delta) + 4.0);
+                        *h = 60.0 * (((in.x - in.y) / delta) + 4.0);
                     }
-                    return;
                 }
 
             __device__
                 void HSV2RGB(uchar3 *rgb, float *dH, float *dS, float *dV) {
                     float h = *dH, s = *dS, v = *dV;
-                    int d = h / (PI / 3.0);
+                    float d = h / 60.0;
                     int hi = (int) d % 6;
-                    int f = d - hi;
-                    int l = v * (1 - s), m = v * (1 - f * s), n = v * (1 - (1 - f) * s);
+                    float f = d - (float) hi;
+                    int l = v * (1.0 - s), m = v * (1.0 - f * s), n = v * (1.0 - (1.0 - f) * s);
 
-                    float sixty = (PI / 3);
-                    if(h >= 0 && h < sixty)
-                        *rgb = {(unsigned char) v, (unsigned char) n, (unsigned char) l};
-                    else if(h >= sixty && h < sixty * 2)
-                        *rgb = {(unsigned char) m, (unsigned char) v, (unsigned char) l};
-                    else if(h >= sixty * 2 && h < sixty * 3)
-                        *rgb = {(unsigned char) l, (unsigned char) v, (unsigned char) n};
-                    else if(h >= sixty * 3 && h < sixty * 4)
-                        *rgb = {(unsigned char) l, (unsigned char) m, (unsigned char) v};
-                    else if(h >= sixty * 4 && h < sixty * 5)
-                        *rgb = {(unsigned char) n, (unsigned char) l, (unsigned char) v};
-                    else
-                        *rgb = {(unsigned char) v, (unsigned char) l, (unsigned char) m};
+                    unsigned char R, G, B;
+                    if(hi == 0) {
+                        R = v; G = n; B = l;
+                    }
+                    else if(hi == 1) {
+                        R = m; G = v; B = l;
+                    }
+                    else if(hi == 2) {
+                        R = l; G = v; B = n;
+                    }
+                    else if(hi == 3) {
+                        R = l; G = m; B = v;
+                    }
+                    else if(hi == 4) {
+                        R = n; G = l; B = v;
+                    }
+                    else {
+                        R = v; G = l; B = m;
+                    }
+                    *rgb = {R, G, B};
                 }
     };
 
@@ -802,6 +806,31 @@ namespace LW8 {
     }
 
     inline int countBlock(int size, int threads) {return (size + threads - 1) / threads;}
+
+    template<typename T>
+        void display(LW7::DeviceData<T> &data, int num, int sz) {
+            T host[sz];
+            data.copyToHost(host);
+            int tt = sz;
+            if(num) tt = num;
+            for(int i = 0; i < tt; i++) {
+                std::cout << host[i] << "  ";
+            }
+            std::cout << std::endl;
+        }
+
+    void displayUchar3(LW7::DeviceData<uchar3> &data, int num, int sz) {
+        uchar3 host[sz];
+        data.copyToHost(host);
+        int tt = sz;
+        if(num) tt = num;
+        for(int i = 0; i < tt; i++) {
+            std::cout << (int) *((unsigned char *) &host[i]) << " ";
+            std::cout << (int) *((unsigned char *) &host[i] + 1) << " ";
+            std::cout << (int) *((unsigned char *) &host[i] + 2) << " | ";
+        }
+        std::cout << std::endl;
+    }
 }
 
 void Labwork::labwork8_GPU() {
@@ -811,15 +840,26 @@ void Labwork::labwork8_GPU() {
     const int height = inputImage->height;
 
     DeviceData<uchar3> image((uchar3 *) inputImage->buffer, count);
+    DeviceData<uchar3> imageOut(count);
     DeviceData<float> h(count), s(count), v(count);
 
     dim3 threads(16, 16);
     dim3 blocks(LW8::countBlock(height, threads.x), LW8::countBlock(width, threads.y));
     LW8::convertRgb2Hsv<<<blocks, threads>>>(h.data, s.data, v.data, image.data, height, width);
-    LW8::convertHsv2Rgb<<<blocks, threads>>>(image.data, h.data, s.data, v.data, height, width);
+
+//    std::cout << "image: " << std::endl;
+//    LW8::displayUchar3(image, 10, count);
+//
+//    std::cout << "Hue: " << std::endl;
+//    LW8::display<float>(h, 10, count);
+//
+//    std::cout << "Value: " << std::endl;
+//    LW8::display<float>(v, 10, count);
+
+    LW8::convertHsv2Rgb<<<blocks, threads>>>(imageOut.data, h.data, s.data, v.data, height, width);
 
     outputImage = (char *) malloc(count * 3 * sizeof(char));
-    image.copyToHost((uchar3 *) outputImage);
+    imageOut.copyToHost((uchar3 *) outputImage);
 }
 
 void Labwork::labwork9_GPU() {
